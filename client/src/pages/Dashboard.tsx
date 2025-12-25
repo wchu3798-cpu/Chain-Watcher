@@ -1,6 +1,7 @@
 import { Header } from "@/components/Header";
 import { LogEntry } from "@/components/LogEntry";
 import { StatusCard } from "@/components/StatusCard";
+import { AnomalyWindow } from "@/components/AnomalyWindow";
 import { useLogs } from "@/hooks/use-logs";
 import { Activity, Server, Clock, Database, Terminal } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -17,9 +18,9 @@ export default function Dashboard() {
     <div className="min-h-screen bg-background flex flex-col font-sans">
       <Header />
       
-      <main className="flex-1 p-6 grid grid-cols-1 lg:grid-cols-4 gap-6 max-w-[1800px] mx-auto w-full">
+      <main className="flex-1 p-6 grid grid-cols-1 lg:grid-cols-4 gap-6 max-w-[2000px] mx-auto w-full">
         {/* Sidebar Stats Area */}
-        <div className="lg:col-span-1 flex flex-col gap-4">
+        <div className="lg:col-span-1 flex flex-col gap-6">
           <div className="grid grid-cols-2 lg:grid-cols-1 gap-4">
             <StatusCard 
               label="System Status" 
@@ -27,46 +28,32 @@ export default function Dashboard() {
               status="active" 
             />
             <StatusCard 
-              label="Last Event" 
-              value={lastActive} 
-              status="inactive" 
-            />
-            <StatusCard 
-              label="Errors (24h)" 
-              value={errorCount.toString()} 
-              status={errorCount > 0 ? "warning" : "inactive"} 
-            />
-            <StatusCard 
-              label="Total Events" 
-              value={logs?.length.toString() || "0"} 
-              status="inactive" 
+              label="Threat Level" 
+              value={errorCount > 0 ? "CRITICAL" : warnCount > 0 ? "ELEVATED" : "NORMAL"} 
+              status={errorCount > 0 ? "warning" : "active"} 
             />
           </div>
           
-          <div className="bg-card/50 border border-border rounded-xl p-6 flex-1 min-h-[200px] relative overflow-hidden hidden lg:flex flex-col">
+          <div className="flex-1 min-h-[400px]">
+            <AnomalyWindow logs={logs || []} />
+          </div>
+
+          <div className="bg-card/50 border border-border rounded-xl p-6 relative overflow-hidden hidden lg:flex flex-col">
             <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-4 flex items-center gap-2">
               <Server className="w-4 h-4" /> Node Telemetry
             </h3>
             <div className="space-y-4 text-sm font-mono text-muted-foreground/80 flex-1">
               <div className="flex justify-between border-b border-border/30 pb-2">
-                <span>Mem Usage</span>
-                <span className="text-primary">124 MB</span>
-              </div>
-              <div className="flex justify-between border-b border-border/30 pb-2">
-                <span>CPU Load</span>
-                <span className="text-primary">2.4%</span>
-              </div>
-              <div className="flex justify-between border-b border-border/30 pb-2">
-                <span>Uptime</span>
-                <span className="text-primary">4d 12h</span>
-              </div>
-              <div className="flex justify-between border-b border-border/30 pb-2">
                 <span>Network</span>
-                <span className="text-emerald-400">Connected</span>
+                <span className="text-emerald-400">Mainnet</span>
+              </div>
+              <div className="flex justify-between border-b border-border/30 pb-2">
+                <span>Latency</span>
+                <span className="text-primary">42ms</span>
               </div>
             </div>
             
-            <div className="mt-auto pt-6">
+            <div className="mt-6">
               <div className="h-1 w-full bg-primary/10 rounded-full overflow-hidden">
                 <motion.div 
                   className="h-full bg-primary"
@@ -74,9 +61,9 @@ export default function Dashboard() {
                   transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
                 />
               </div>
-              <div className="flex justify-between mt-2 text-[10px] text-muted-foreground">
-                <span>SYNCING</span>
-                <span>BLOCK 18293402</span>
+              <div className="flex justify-between mt-2 text-[10px] text-muted-foreground font-mono">
+                <span>ACTIVE SCAN</span>
+                <span>{logs?.[0]?.message.match(/\d+/)?.[0] || "---"}</span>
               </div>
             </div>
           </div>
