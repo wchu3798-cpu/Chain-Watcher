@@ -62,7 +62,7 @@ export function AnomalyWindow({ logs }: AnomalyWindowProps) {
                         </span>
                       </div>
                       <span className="text-[10px] font-mono text-muted-foreground">
-                        {new Date(log.createdAt).toLocaleTimeString()}
+                        {log.createdAt ? new Date(log.createdAt).toLocaleTimeString() : "--"}
                       </span>
                     </div>
 

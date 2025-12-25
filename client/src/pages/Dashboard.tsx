@@ -70,7 +70,7 @@ export default function Dashboard() {
         </div>
 
         {/* Main Log Viewer */}
-        <div className="lg:col-span-3 bg-card border border-border rounded-xl flex flex-col shadow-2xl overflow-hidden h-[calc(100vh-8rem)]">
+        <div className="lg:col-span-3 bg-card border border-border rounded-xl flex flex-col shadow-2xl overflow-hidden h-[800px]">
           <div className="h-12 border-b border-border flex items-center px-4 bg-muted/20 justify-between">
             <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
               <Terminal className="w-4 h-4" />
