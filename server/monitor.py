@@ -203,7 +203,7 @@ class Config:
         self.node_url = os.getenv('NODE_URL', 'https://eth.llamarpc.com')
         self.contract_address = os.getenv('CONTRACT_ADDRESS', '0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D')
         self.contract_name = os.getenv('CONTRACT_NAME', 'Uniswap V2 Router')
-        self.poll_interval = int(os.getenv('POLL_INTERVAL', '12')) # Block time
+        self.poll_interval = int(os.getenv('POLL_INTERVAL', '12'))
         self.max_retries = 5
 
 class XeraSentry:
@@ -212,6 +212,8 @@ class XeraSentry:
         self.running = False
         self.w3 = None
         self.detection_engine = SmartDetectionEngine()
+        self.gas_history = deque(maxlen=100)
+        self.value_history = deque(maxlen=100)
 
     def log_to_dashboard(self, level, message, data=None):
         print(json.dumps({
@@ -239,13 +241,76 @@ class XeraSentry:
             await asyncio.sleep(wait_time)
         return False
 
+    async def process_block(self, block_number: int):
+        try:
+            block = await self.w3.eth.get_block(block_number, full_transactions=True)
+            self.log_to_dashboard("INFO", f"🔍 Analyzing {len(block['transactions'])} transactions in block {block_number}")
+            
+            gas_baseline = np.median(list(self.gas_history)) if self.gas_history else 21000
+            value_baseline = np.median(list(self.value_history)) if self.value_history else 0.1
+
+            for tx in block['transactions']:
+                # Only analyze transactions to the target contract
+                if tx.get('to') and tx['to'].lower() == self.config.contract_address.lower():
+                    try:
+                        receipt = await self.w3.eth.get_transaction_receipt(tx['hash'])
+                        
+                        sender = tx['from']
+                        sender_balance = float(self.w3.from_wei(await self.w3.eth.get_balance(sender), 'ether'))
+                        sender_nonce = await self.w3.eth.get_transaction_count(sender)
+                        is_contract = len(await self.w3.eth.get_code(sender)) > 0
+                        
+                        ctx = TransactionContext(
+                            tx_hash=tx['hash'].hex(),
+                            sender=sender,
+                            gas_used=receipt['gasUsed'],
+                            value_eth=float(self.w3.from_wei(tx['value'], 'ether')),
+                            timestamp=datetime.fromtimestamp(block['timestamp']),
+                            function_selector=tx['input'][:10].hex() if tx['input'] else '0x',
+                            status=receipt['status'],
+                            sender_nonce=sender_nonce,
+                            sender_balance=sender_balance,
+                            is_contract=is_contract
+                        )
+
+                        score = self.detection_engine.analyze_transaction(ctx, gas_baseline, value_baseline)
+                        
+                        self.gas_history.append(ctx.gas_used)
+                        self.value_history.append(ctx.value_eth)
+
+                        if score.should_alert:
+                            self.log_to_dashboard("WARN" if score.confidence != "CRITICAL" else "ERROR", 
+                                f"⚠️ {score.confidence} THREAT: {tx_hash}", 
+                                {
+                                    "hash": ctx.tx_hash,
+                                    "score": score.total_score,
+                                    "confidence": score.confidence,
+                                    "reasoning": score.reasoning,
+                                    "indicators": score.indicators
+                                }
+                            )
+                        else:
+                            # Log every interaction for visibility
+                            self.log_to_dashboard("INFO", f"Clean interaction: {ctx.tx_hash[:10]}...", {
+                                "hash": ctx.tx_hash,
+                                "score": score.total_score,
+                                "confidence": score.confidence
+                            })
+
+                    except Exception as e:
+                        # Silently skip individual tx errors to keep the loop moving
+                        continue
+                        
+        except Exception as e:
+            self.log_to_dashboard("ERROR", f"Block processing error: {str(e)}")
+
     async def run(self):
         if not await self.connect():
             self.log_to_dashboard("CRITICAL", "Maximum connection retries exceeded. Exiting.")
             return
 
         self.running = True
-        self.log_to_dashboard("INFO", "🚀 XeraSentry async monitor started")
+        self.log_to_dashboard("INFO", f"🚀 Monitoring contract: {self.config.contract_address}")
         
         last_processed_block = await self.w3.eth.block_number
         
@@ -254,16 +319,15 @@ class XeraSentry:
                 current_block = await self.w3.eth.block_number
                 
                 if current_block > last_processed_block:
-                    for bn in range(last_processed_block + 1, current_block + 1):
-                        self.log_to_dashboard("INFO", f"📦 Processing block {bn}")
-                        # In a full implementation, we would fetch and analyze all txs in the block here
-                        # await self.process_block(bn)
+                    # Process at most 5 blocks at once to avoid being rate limited
+                    start_block = max(last_processed_block + 1, current_block - 5)
+                    for bn in range(start_block, current_block + 1):
+                        await self.process_block(bn)
                     last_processed_block = current_block
                 
                 await asyncio.sleep(self.config.poll_interval)
             except Exception as e:
                 self.log_to_dashboard("ERROR", f"Runtime Loop Error: {str(e)}")
-                # Exponential backoff on loop error
                 await asyncio.sleep(10)
 
 if __name__ == "__main__":
