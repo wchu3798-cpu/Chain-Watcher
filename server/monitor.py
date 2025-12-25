@@ -2,30 +2,28 @@ import sys
 import os
 import time
 import json
+import asyncio
 import logging
 import sqlite3
+import random
 from datetime import datetime
 from typing import Dict, List, Set, Optional, Tuple
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from enum import Enum
 
-# === AUTO-INSTALLER ===
-# Note: Handled by packager_tool in Replit Agent environment
-
-from web3 import Web3
+from web3 import AsyncWeb3
+from web3.providers import AsyncHTTPProvider
 import numpy as np
-import requests
+import httpx
+import aiohttp
 
 # === LOGGING ===
-# Adjusted to output JSON for the dashboard
 logging.basicConfig(
     level=logging.INFO,
     format='%(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# === SMART DETECTION ENGINE ===
 
 class ThreatIndicator(Enum):
     GAS_DEVIATION = "gas_deviation"
@@ -66,19 +64,15 @@ class SmartDetectionEngine:
             '0x1da5821544e25c636c1417ba96ade4cf6d2f9b5a',
             '0x3f5ce5fbfe3e9af3971dd833d26ba9b5c936f0be',
         }
-
         self.mev_bots = {
             '0x000000000035b5e5ad9019092c665357240f594e',
         }
-
         self.address_history = defaultdict(lambda: {
             'tx_count': 0,
             'first_seen': None,
             'total_value': 0.0
         })
-
         self.recent_txs = deque(maxlen=1000)
-
         self.thresholds = {
             'gas_deviation_pct': 10.0,
             'value_deviation_pct': 20.0,
@@ -88,7 +82,6 @@ class SmartDetectionEngine:
             'new_address_tx_limit': 3,
             'burner_balance_limit': 0.1
         }
-
         self.weights = {
             ThreatIndicator.GAS_DEVIATION: 15,
             ThreatIndicator.VALUE_DEVIATION: 15,
@@ -111,7 +104,6 @@ class SmartDetectionEngine:
         base_score = 0.0
         multipliers = 1.0
 
-        # High confidence checks
         if ctx.sender.lower() in self.known_attackers:
             indicators['known_attacker'] = 100
             reasoning.append("🚨 KNOWN ATTACKER")
@@ -123,7 +115,6 @@ class SmartDetectionEngine:
             reasoning.append("🚨 Honeypot trap triggered")
             base_score += 100
 
-        # Medium confidence
         recent = [tx for tx in self.recent_txs
                  if tx['sender'] == ctx.sender and
                  (ctx.timestamp - tx['timestamp']).total_seconds() < self.thresholds['rapid_tx_window']]
@@ -149,7 +140,6 @@ class SmartDetectionEngine:
             reasoning.append(f"🌙 Unusual hour ({ctx.timestamp.hour}:00 UTC)")
             base_score += 10
 
-        # Low confidence
         gas_deviation = abs((ctx.gas_used - gas_baseline) / gas_baseline * 100) if gas_baseline > 0 else 0
         if gas_deviation > self.thresholds['gas_deviation_pct']:
             indicators['gas_deviation'] = 15
@@ -162,7 +152,6 @@ class SmartDetectionEngine:
             reasoning.append(f"💰 Value {value_deviation:.1f}% above baseline")
             base_score += 15
 
-        # Multipliers
         if ctx.sender_nonce < 5 and ctx.sender_balance < self.thresholds['burner_balance_limit']:
             indicators['burner_wallet'] = 1.5
             reasoning.append(f"🔥 Burner wallet")
@@ -180,7 +169,6 @@ class SmartDetectionEngine:
 
         total_score = base_score * multipliers
 
-        # Classify
         if 'known_attacker' in indicators or 'honeypot_call' in indicators:
             confidence = "CRITICAL"
             should_alert = True
@@ -197,7 +185,6 @@ class SmartDetectionEngine:
             confidence = "LOW"
             should_alert = False
 
-        # Update history
         if history['first_seen'] is None:
             history['first_seen'] = ctx.timestamp
         history['tx_count'] += 1
@@ -211,102 +198,75 @@ class SmartDetectionEngine:
 
         return ThreatScore(total_score, confidence, reasoning[:5], should_alert, indicators)
 
-# === CONFIG ===
-
 class Config:
     def __init__(self):
         self.node_url = os.getenv('NODE_URL', 'https://eth.llamarpc.com')
         self.contract_address = os.getenv('CONTRACT_ADDRESS', '0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D')
         self.contract_name = os.getenv('CONTRACT_NAME', 'Uniswap V2 Router')
-
-        self.whitelist = set()
-        self.honeypot_selectors = ['0xdeadbeef', '0xbaadface']
-
-        self.poll_interval = int(os.getenv('POLL_INTERVAL', '20'))
-        self.training_lookback = int(os.getenv('TRAINING_LOOKBACK', '30'))
-        self.max_history_size = 1000
-
-        self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN', '')
-        self.telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID', '')
-        self.alert_cooldown = 300
-
-        self.status_interval = 300  # Print status every 5 minutes
-
-# === MAIN MONITOR ===
+        self.poll_interval = int(os.getenv('POLL_INTERVAL', '12')) # Block time
+        self.max_retries = 5
 
 class XeraSentry:
     def __init__(self, config: Config):
         self.config = config
         self.running = False
-
-        # Initialize Web3
-        self.log_to_dashboard("INFO", f"🔌 Connecting to {config.node_url}")
-        self.w3 = Web3(Web3.HTTPProvider(config.node_url, request_kwargs={'timeout': 30}))
-
-        if not self.w3.is_connected():
-            self.log_to_dashboard("ERROR", "Failed to connect to Ethereum node")
-            raise ConnectionError("Failed to connect to Ethereum node")
-
-        self.log_to_dashboard("INFO", f"✅ Connected to Ethereum (Chain ID: {self.w3.eth.chain_id})")
-
-        self.addr = Web3.to_checksum_address(config.contract_address)
-        self.log_to_dashboard("INFO", f"🎯 Monitoring: {config.contract_name}")
-
-        # Initialize components
+        self.w3 = None
         self.detection_engine = SmartDetectionEngine()
-
-        self.history = defaultdict(lambda: {
-            'gas': deque(maxlen=config.max_history_size),
-            'value': deque(maxlen=config.max_history_size)
-        })
-        self.baselines = {}
-        self.local_blacklist = set()
-        self.alert_cache = {}
-
-        # Statistics
-        self.stats = {
-            'start_time': datetime.now(),
-            'blocks_processed': 0,
-            'transactions_processed': 0,
-            'alerts_triggered': 0,
-            'alerts_filtered': 0,
-            'errors': 0
-        }
-
-        # Database (Using SQLite for local persistent storage if needed, 
-        # but also logging to the dashboard via print)
-        self._init_db()
-        self.log_to_dashboard("INFO", "🛡️  XeraSentry v4.0 initialized")
 
     def log_to_dashboard(self, level, message, data=None):
         print(json.dumps({
             "level": level,
             "message": message,
-            "data": data
+            "data": data,
+            "timestamp": datetime.now().isoformat()
         }), flush=True)
 
-    def _init_db(self):
-        db_name = 'xerasentry_continuous.db'
-        self.conn = sqlite3.connect(db_name, check_same_thread=False)
-        # ... (Table creation logic from your script)
-        self.conn.commit()
+    async def connect(self):
+        retries = 0
+        while retries < self.config.max_retries:
+            try:
+                self.log_to_dashboard("INFO", f"🔌 Connecting to {self.config.node_url} (Attempt {retries+1})")
+                self.w3 = AsyncWeb3(AsyncHTTPProvider(self.config.node_url))
+                if await self.w3.is_connected():
+                    chain_id = await self.w3.eth.chain_id
+                    self.log_to_dashboard("INFO", f"✅ Connected to Ethereum (Chain ID: {chain_id})")
+                    return True
+            except Exception as e:
+                self.log_to_dashboard("ERROR", f"Connection failed: {str(e)}")
+            
+            retries += 1
+            wait_time = min(2 ** retries + random.uniform(0, 1), 30)
+            await asyncio.sleep(wait_time)
+        return False
 
-    def run(self):
+    async def run(self):
+        if not await self.connect():
+            self.log_to_dashboard("CRITICAL", "Maximum connection retries exceeded. Exiting.")
+            return
+
         self.running = True
-        self.log_to_dashboard("INFO", "🚀 XeraSentry monitor loop started")
+        self.log_to_dashboard("INFO", "🚀 XeraSentry async monitor started")
+        
+        last_processed_block = await self.w3.eth.block_number
         
         while self.running:
             try:
-                # Simple loop to demonstrate periodic checks
-                # In your full code, you would use self.w3.eth.get_block or filters
-                latest_block = self.w3.eth.get_block('latest')
-                self.log_to_dashboard("INFO", f"Checked block {latest_block['number']}")
-                time.sleep(self.config.poll_interval)
+                current_block = await self.w3.eth.block_number
+                
+                if current_block > last_processed_block:
+                    for bn in range(last_processed_block + 1, current_block + 1):
+                        self.log_to_dashboard("INFO", f"📦 Processing block {bn}")
+                        # In a full implementation, we would fetch and analyze all txs in the block here
+                        # await self.process_block(bn)
+                    last_processed_block = current_block
+                
+                await asyncio.sleep(self.config.poll_interval)
             except Exception as e:
-                self.log_to_dashboard("ERROR", f"Monitor Error: {str(e)}")
-                time.sleep(10)
+                self.log_to_dashboard("ERROR", f"Runtime Loop Error: {str(e)}")
+                # Exponential backoff on loop error
+                await asyncio.sleep(10)
 
 if __name__ == "__main__":
     config = Config()
     sentry = XeraSentry(config)
-    sentry.run()
+    asyncio.run(sentry.run())

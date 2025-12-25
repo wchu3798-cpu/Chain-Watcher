@@ -11,7 +11,9 @@ function startMonitor() {
   if (monitorProcess) return;
 
   console.log("Starting Python monitor script...");
-  monitorProcess = spawn("python3", ["server/monitor.py"]);
+  monitorProcess = spawn("python3", ["server/monitor.py"], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 
   monitorProcess.stdout?.on("data", async (data) => {
     const lines = data.toString().split("\n");
