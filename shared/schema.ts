@@ -1,18 +1,19 @@
-import { sql } from "drizzle-orm";
-import { pgTable, text, varchar } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
+export const monitoringLogs = pgTable("monitoring_logs", {
+  id: serial("id").primaryKey(),
+  level: text("level").notNull(), // INFO, WARN, ERROR
+  message: text("message").notNull(),
+  data: jsonb("data"), // Any extra data from the script
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
-export const insertUserSchema = createInsertSchema(users).pick({
-  username: true,
-  password: true,
+export const insertLogSchema = createInsertSchema(monitoringLogs).omit({ 
+  id: true, 
+  createdAt: true 
 });
 
-export type InsertUser = z.infer<typeof insertUserSchema>;
-export type User = typeof users.$inferSelect;
+export type Log = typeof monitoringLogs.$inferSelect;
+export type InsertLog = z.infer<typeof insertLogSchema>;
