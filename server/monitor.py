@@ -1,13 +1,11 @@
 import sys
 import os
-import time
 import json
 import asyncio
 import logging
-import sqlite3
 import random
 from datetime import datetime
-from typing import Dict, List, Set, Optional, Tuple
+from typing import Dict, List, Optional
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from enum import Enum
@@ -15,8 +13,7 @@ from enum import Enum
 from web3 import AsyncWeb3
 from web3.providers import AsyncHTTPProvider
 import numpy as np
-import httpx
-import aiohttp
+import requests
 
 # === LOGGING ===
 logging.basicConfig(
@@ -73,18 +70,6 @@ class SmartDetectionEngine:
             'total_value': 0.0
         })
         self.recent_txs = deque(maxlen=1000)
-        self.weights = {
-            ThreatIndicator.GAS_DEVIATION: 20,
-            ThreatIndicator.VALUE_DEVIATION: 20,
-            ThreatIndicator.RAPID_TRANSACTIONS: 35,
-            ThreatIndicator.UNUSUAL_TIME: 15,
-            ThreatIndicator.NEW_ADDRESS: 20,
-            ThreatIndicator.FAILED_TRANSACTION: 40,
-            ThreatIndicator.HONEYPOT_CALL: 100,
-            ThreatIndicator.KNOWN_ATTACKER: 100,
-            ThreatIndicator.BURNER_WALLET: 2.0,
-            ThreatIndicator.HIGH_VALUE: 1.5,
-        }
         self.thresholds = {
             'gas_deviation_pct': 5.0,
             'value_deviation_pct': 10.0,
@@ -196,7 +181,6 @@ class SmartDetectionEngine:
             'function_selector': ctx.function_selector
         })
 
-        # Simulated threat logic removed - real threats only
         return ThreatScore(total_score, confidence, reasoning[:5], should_alert, indicators)
 
 class Config:
@@ -223,6 +207,17 @@ class XeraSentry:
             "data": data,
             "timestamp": datetime.now().isoformat()
         }), flush=True)
+
+    def send_telegram_alert(self, message):
+        token = os.getenv('TELEGRAM_BOT_TOKEN')
+        chat_id = os.getenv('TELEGRAM_CHAT_ID')
+        if not token or not chat_id:
+            return
+        try:
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            requests.post(url, data={"chat_id": chat_id, "text": message}, timeout=10)
+        except Exception as e:
+            self.log_to_dashboard("ERROR", f"Telegram Alert Failed: {str(e)}")
 
     async def connect(self):
         retries = 0
@@ -251,11 +246,9 @@ class XeraSentry:
             value_baseline = np.median(list(self.value_history)) if self.value_history else 0.1
 
             for tx in block['transactions']:
-                # Only analyze transactions to the target contract
                 if tx.get('to') and tx['to'].lower() == self.config.contract_address.lower():
                     try:
                         receipt = await self.w3.eth.get_transaction_receipt(tx['hash'])
-                        
                         sender = tx['from']
                         sender_balance = float(self.w3.from_wei(await self.w3.eth.get_balance(sender), 'ether'))
                         sender_nonce = await self.w3.eth.get_transaction_count(sender)
@@ -290,16 +283,20 @@ class XeraSentry:
                                     "indicators": score.indicators
                                 }
                             )
+                            if score.confidence in ["HIGH", "CRITICAL"]:
+                                alert_msg = f"🚨 {score.confidence} THREAT DETECTED\n"
+                                alert_msg += f"Hash: {ctx.tx_hash[:10]}...\n"
+                                alert_msg += f"Score: {score.total_score}\n"
+                                alert_msg += "Reasons:\n" + "\n".join([f"- {r}" for r in score.reasoning])
+                                self.send_telegram_alert(alert_msg)
                         else:
-                            # Log every interaction for visibility
                             self.log_to_dashboard("INFO", f"Clean interaction: {ctx.tx_hash[:10]}...", {
                                 "hash": ctx.tx_hash,
                                 "score": score.total_score,
                                 "confidence": score.confidence
                             })
 
-                    except Exception as e:
-                        # Silently skip individual tx errors to keep the loop moving
+                    except Exception:
                         continue
                         
         except Exception as e:
@@ -320,7 +317,6 @@ class XeraSentry:
                 current_block = await self.w3.eth.block_number
                 
                 if current_block > last_processed_block:
-                    # Process at most 5 blocks at once to avoid being rate limited
                     start_block = max(last_processed_block + 1, current_block - 5)
                     for bn in range(start_block, current_block + 1):
                         await self.process_block(bn)
