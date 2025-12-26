@@ -9,7 +9,9 @@ interface AnomalyWindowProps {
 }
 
 export function AnomalyWindow({ logs }: AnomalyWindowProps) {
-  const anomalies = logs.filter(l => l.level === "WARN" || l.level === "ERROR" || (l.data as any)?.score > 50);
+  const anomalies = [...logs]
+    .filter(l => l.level === "WARN" || l.level === "ERROR" || (l.data as any)?.score > 50)
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 
   return (
     <div className="bg-card border border-border rounded-xl flex flex-col shadow-2xl overflow-hidden h-full">

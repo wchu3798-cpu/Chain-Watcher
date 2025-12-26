@@ -13,7 +13,7 @@ export class DatabaseStorage implements IStorage {
     return await db.select()
       .from(monitoringLogs)
       .orderBy(desc(monitoringLogs.createdAt))
-      .limit(100);
+      .limit(500);
   }
 
   async createLog(log: InsertLog): Promise<Log> {
