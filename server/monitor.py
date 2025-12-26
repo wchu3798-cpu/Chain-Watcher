@@ -73,26 +73,26 @@ class SmartDetectionEngine:
             'total_value': 0.0
         })
         self.recent_txs = deque(maxlen=1000)
-        self.thresholds = {
-            'gas_deviation_pct': 10.0,
-            'value_deviation_pct': 20.0,
-            'min_value_for_alert': 0.5,
-            'rapid_tx_count': 5,
-            'rapid_tx_window': 60,
-            'new_address_tx_limit': 3,
-            'burner_balance_limit': 0.1
-        }
         self.weights = {
-            ThreatIndicator.GAS_DEVIATION: 15,
-            ThreatIndicator.VALUE_DEVIATION: 15,
-            ThreatIndicator.RAPID_TRANSACTIONS: 25,
-            ThreatIndicator.UNUSUAL_TIME: 10,
-            ThreatIndicator.NEW_ADDRESS: 15,
-            ThreatIndicator.FAILED_TRANSACTION: 30,
+            ThreatIndicator.GAS_DEVIATION: 20,
+            ThreatIndicator.VALUE_DEVIATION: 20,
+            ThreatIndicator.RAPID_TRANSACTIONS: 35,
+            ThreatIndicator.UNUSUAL_TIME: 15,
+            ThreatIndicator.NEW_ADDRESS: 20,
+            ThreatIndicator.FAILED_TRANSACTION: 40,
             ThreatIndicator.HONEYPOT_CALL: 100,
             ThreatIndicator.KNOWN_ATTACKER: 100,
-            ThreatIndicator.BURNER_WALLET: 1.5,
-            ThreatIndicator.HIGH_VALUE: 1.3,
+            ThreatIndicator.BURNER_WALLET: 2.0,
+            ThreatIndicator.HIGH_VALUE: 1.5,
+        }
+        self.thresholds = {
+            'gas_deviation_pct': 5.0,
+            'value_deviation_pct': 10.0,
+            'min_value_for_alert': 0.1,
+            'rapid_tx_count': 3,
+            'rapid_tx_window': 120,
+            'new_address_tx_limit': 5,
+            'burner_balance_limit': 0.5
         }
 
     def analyze_transaction(self, ctx: TransactionContext, gas_baseline: float, value_baseline: float) -> ThreatScore:
@@ -196,6 +196,14 @@ class SmartDetectionEngine:
             'function_selector': ctx.function_selector
         })
 
+        # Simulated threat every 10 blocks for testing
+        if ctx.tx_hash.endswith('0') or ctx.tx_hash.endswith('1'):
+            total_score = max(total_score, 85.0)
+            confidence = "HIGH"
+            should_alert = True
+            reasoning.append("🧪 SIMULATED THREAT (Test Mode)")
+            indicators['simulated_threat'] = 85.0
+
         return ThreatScore(total_score, confidence, reasoning[:5], should_alert, indicators)
 
 class Config:
@@ -280,7 +288,7 @@ class XeraSentry:
 
                         if score.should_alert:
                             self.log_to_dashboard("WARN" if score.confidence != "CRITICAL" else "ERROR", 
-                                f"⚠️ {score.confidence} THREAT: {tx_hash}", 
+                                f"⚠️ {score.confidence} THREAT: {ctx.tx_hash[:10]}", 
                                 {
                                     "hash": ctx.tx_hash,
                                     "score": score.total_score,
