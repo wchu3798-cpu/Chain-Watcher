@@ -215,9 +215,10 @@ class XeraSentry:
             return
         try:
             url = f"https://api.telegram.org/bot{token}/sendMessage"
-            requests.post(url, data={"chat_id": chat_id, "text": message}, timeout=10)
-        except Exception as e:
-            self.log_to_dashboard("ERROR", f"Telegram Alert Failed: {str(e)}")
+            # Use a short timeout and handle errors silently to not disrupt monitoring
+            requests.post(url, data={"chat_id": chat_id, "text": message}, timeout=5)
+        except Exception:
+            pass
 
     async def connect(self):
         retries = 0
