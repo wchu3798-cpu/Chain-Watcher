@@ -196,14 +196,7 @@ class SmartDetectionEngine:
             'function_selector': ctx.function_selector
         })
 
-        # Simulated threat every 10 blocks for testing
-        if ctx.tx_hash.endswith('0') or ctx.tx_hash.endswith('1'):
-            total_score = max(total_score, 85.0)
-            confidence = "HIGH"
-            should_alert = True
-            reasoning.append("🧪 SIMULATED THREAT (Test Mode)")
-            indicators['simulated_threat'] = 85.0
-
+        # Simulated threat logic removed - real threats only
         return ThreatScore(total_score, confidence, reasoning[:5], should_alert, indicators)
 
 class Config:
