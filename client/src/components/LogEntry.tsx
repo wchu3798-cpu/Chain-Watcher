@@ -50,7 +50,7 @@ export function LogEntry({ log }: LogEntryProps) {
       <div className="flex items-start gap-4 font-mono text-sm">
         {/* Timestamp */}
         <div className="shrink-0 w-24 text-muted-foreground/60 text-xs pt-0.5">
-          {log.createdAt ? format(new Date(log.createdAt), "HH:mm:ss.SSS") : "--"}
+          {log.createdAt ? format(new Date(log.createdAt as string | number | Date), "HH:mm:ss.SSS") : "--"}
         </div>
 
         {/* Level Badge */}
