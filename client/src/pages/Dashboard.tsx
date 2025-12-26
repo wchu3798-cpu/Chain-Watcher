@@ -3,11 +3,42 @@ import { LogEntry } from "@/components/LogEntry";
 import { StatusCard } from "@/components/StatusCard";
 import { AnomalyWindow } from "@/components/AnomalyWindow";
 import { useLogs } from "@/hooks/use-logs";
-import { Activity, Server, Clock, Database, Terminal } from "lucide-react";
+import { Activity, Server, Clock, Database, Terminal, Trash2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 export default function Dashboard() {
   const { data: logs, isLoading, error } = useLogs();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const { toast } = useToast();
+
+  // Handle auto-scroll
+  useEffect(() => {
+    if (autoScroll && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [logs, autoScroll]);
+
+  const handleClearLogs = async () => {
+    try {
+      await apiRequest("DELETE", "/api/logs");
+      queryClient.invalidateQueries({ queryKey: ["/api/logs"] });
+      toast({
+        title: "Logs cleared",
+        description: "Dashboard history has been reset.",
+      });
+    } catch (err) {
+      toast({
+        title: "Error",
+        description: "Failed to clear logs.",
+        variant: "destructive",
+      });
+    }
+  };
 
   // Calculate simple stats from logs
   const errorCount = logs?.filter(l => l.level === "ERROR").length || 0;
@@ -72,18 +103,46 @@ export default function Dashboard() {
         {/* Main Log Viewer */}
         <div className="lg:col-span-3 bg-card border border-border rounded-xl flex flex-col shadow-2xl overflow-hidden h-[800px]">
           <div className="h-12 border-b border-border flex items-center px-4 bg-muted/20 justify-between">
-            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-              <Terminal className="w-4 h-4" />
-              <span>Live Console Output</span>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                <Terminal className="w-4 h-4" />
+                <span>Live Console Output</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="autoscroll"
+                  checked={autoScroll}
+                  onChange={(e) => setAutoScroll(e.target.checked)}
+                  className="w-3 h-3 rounded border-border bg-background text-primary focus:ring-primary/20"
+                />
+                <label htmlFor="autoscroll" className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold cursor-pointer select-none">
+                  Auto-scroll
+                </label>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="flex h-2 w-2 rounded-full bg-red-500"></span>
-              <span className="flex h-2 w-2 rounded-full bg-yellow-500"></span>
-              <span className="flex h-2 w-2 rounded-full bg-green-500"></span>
+            <div className="flex items-center gap-4">
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={handleClearLogs}
+                className="h-7 text-[10px] uppercase tracking-wider font-bold gap-1.5 text-muted-foreground hover:text-destructive transition-colors"
+              >
+                <Trash2 className="w-3 h-3" />
+                Clear Logs
+              </Button>
+              <div className="flex items-center gap-2">
+                <span className="flex h-2 w-2 rounded-full bg-red-500"></span>
+                <span className="flex h-2 w-2 rounded-full bg-yellow-500"></span>
+                <span className="flex h-2 w-2 rounded-full bg-green-500"></span>
+              </div>
             </div>
           </div>
           
-          <div className="flex-1 overflow-y-auto p-0 scroll-smooth custom-scrollbar bg-[#0a0a0c]">
+          <div 
+            ref={scrollRef}
+            className="flex-1 overflow-y-auto p-0 scroll-smooth custom-scrollbar bg-[#0a0a0c]"
+          >
             {isLoading ? (
               <div className="h-full flex items-center justify-center text-muted-foreground flex-col gap-4">
                 <Activity className="w-8 h-8 animate-pulse text-primary" />
@@ -104,7 +163,7 @@ export default function Dashboard() {
             ) : (
               <div className="flex flex-col pb-4">
                 <AnimatePresence initial={false}>
-                  {logs?.map((log) => (
+                  {[...(logs || [])].reverse().map((log) => (
                     <LogEntry key={log.id} log={log} />
                   ))}
                 </AnimatePresence>
