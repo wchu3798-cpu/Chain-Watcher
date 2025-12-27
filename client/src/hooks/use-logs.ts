@@ -1,8 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@shared/routes";
+import { useState } from "react";
 
 export function useLogs() {
-  return useQuery({
+  const [hideClean, setHideClean] = useState(true);
+
+  const query = useQuery({
     queryKey: [api.logs.list.path],
     queryFn: async () => {
       const res = await fetch(api.logs.list.path, { credentials: "include" });
@@ -12,6 +15,17 @@ export function useLogs() {
     // Auto-refresh every 2 seconds for real-time feel
     refetchInterval: 2000,
   });
+
+  const filteredLogs = hideClean 
+    ? query.data?.filter(log => log.level !== "INFO" || !log.message.toLowerCase().includes("clean interaction"))
+    : query.data;
+
+  return {
+    ...query,
+    data: filteredLogs,
+    hideClean,
+    setHideClean
+  };
 }
 
 export function useClearLogs() {

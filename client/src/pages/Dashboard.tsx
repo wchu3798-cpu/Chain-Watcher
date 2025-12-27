@@ -4,7 +4,7 @@ import { StatusCard } from "@/components/StatusCard";
 import { AnomalyWindow } from "@/components/AnomalyWindow";
 import { Visualizer } from "@/components/Visualizer";
 import { useLogs } from "@/hooks/use-logs";
-import { Activity, Server, Clock, Database, Terminal, Trash2, BarChart3 } from "lucide-react";
+import { Activity, Server, Clock, Database, Terminal, Trash2, BarChart3, Filter } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
 export default function Dashboard() {
-  const { data: logs, isLoading, error } = useLogs();
+  const { data: logs, isLoading, error, hideClean, setHideClean } = useLogs();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const { toast } = useToast();
@@ -130,6 +130,17 @@ export default function Dashboard() {
                 </div>
               </div>
               <div className="flex items-center gap-4">
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => setHideClean(!hideClean)}
+                  className={`h-7 text-[10px] uppercase tracking-wider font-bold gap-1.5 transition-colors ${
+                    hideClean ? "text-primary bg-primary/10" : "text-muted-foreground"
+                  }`}
+                >
+                  <Filter className="w-3 h-3" />
+                  {hideClean ? "Clean Logs Hidden" : "Show All Logs"}
+                </Button>
                 <Button 
                   variant="ghost" 
                   size="sm" 
