@@ -66,7 +66,7 @@ export default function Dashboard() {
             />
           </div>
           
-          <div className="flex-1 min-h-0">
+          <div className="flex-1 min-h-0 bg-card border border-border rounded-xl flex flex-col shadow-2xl overflow-hidden">
             <AnomalyWindow logs={logs || []} />
           </div>
 
