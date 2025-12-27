@@ -47,10 +47,10 @@ export default function Dashboard() {
   const lastActive = logs?.[0]?.createdAt ? new Date(logs[0].createdAt).toLocaleTimeString() : "--";
 
   return (
-    <div className="min-h-screen bg-background flex flex-col font-sans overflow-hidden h-screen">
+    <div className="min-h-screen bg-background flex flex-col font-sans overflow-y-auto overflow-x-hidden">
       <Header />
       
-      <main className="flex-1 p-6 grid grid-cols-1 lg:grid-cols-4 gap-6 max-w-[2000px] mx-auto w-full overflow-hidden h-full">
+      <main className="flex-1 p-6 grid grid-cols-1 lg:grid-cols-4 gap-6 max-w-[2000px] mx-auto w-full">
         {/* Sidebar Stats Area */}
         <div className="lg:col-span-1 flex flex-col gap-6 overflow-hidden">
           <div className="grid grid-cols-2 lg:grid-cols-1 gap-4 flex-shrink-0">
