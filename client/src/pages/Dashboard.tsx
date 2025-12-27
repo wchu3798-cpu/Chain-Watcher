@@ -47,10 +47,10 @@ export default function Dashboard() {
   const lastActive = logs?.[0]?.createdAt ? new Date(logs[0].createdAt).toLocaleTimeString() : "--";
 
   return (
-    <div className="min-h-screen bg-background flex flex-col font-sans">
+    <div className="min-h-screen bg-background flex flex-col font-sans overflow-hidden h-screen">
       <Header />
       
-      <main className="flex-1 p-6 grid grid-cols-1 lg:grid-cols-4 gap-6 max-w-[2000px] mx-auto w-full overflow-hidden">
+      <main className="flex-1 p-6 grid grid-cols-1 lg:grid-cols-4 gap-6 max-w-[2000px] mx-auto w-full overflow-hidden h-full">
         {/* Sidebar Stats Area */}
         <div className="lg:col-span-1 flex flex-col gap-6 overflow-hidden">
           <div className="grid grid-cols-2 lg:grid-cols-1 gap-4 flex-shrink-0">
@@ -102,15 +102,15 @@ export default function Dashboard() {
         </div>
 
         {/* Main Log Viewer Area */}
-        <div className="lg:col-span-3 flex flex-col gap-6 overflow-hidden h-full">
+        <div className="lg:col-span-3 flex flex-col gap-6 h-full min-h-0">
           {/* Visualizations Row */}
-          <div className="h-64 flex-shrink-0">
+          <div className="h-72 flex-shrink-0">
             <Visualizer logs={logs || []} />
           </div>
 
           {/* Main Log Viewer */}
-          <div className="flex-1 bg-card border border-border rounded-xl flex flex-col shadow-2xl overflow-hidden min-h-0">
-            <div className="h-12 border-b border-border flex items-center px-4 bg-muted/20 justify-between">
+          <div className="flex-1 bg-card border border-border rounded-xl flex flex-col shadow-2xl min-h-0">
+            <div className="h-12 border-b border-border flex items-center px-4 bg-muted/20 justify-between flex-shrink-0">
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                   <Terminal className="w-4 h-4" />
