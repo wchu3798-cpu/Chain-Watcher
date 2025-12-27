@@ -185,7 +185,8 @@ class SmartDetectionEngine:
 
 class Config:
     def __init__(self):
-        self.node_url = os.getenv('NODE_URL', 'https://eth.llamarpc.com')
+        # Using a more stable public RPC endpoint
+        self.node_url = os.getenv('NODE_URL', 'https://ethereum-rpc.publicnode.com')
         self.contract_address = os.getenv('CONTRACT_ADDRESS', '0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D')
         self.contract_name = os.getenv('CONTRACT_NAME', 'Uniswap V2 Router')
         self.poll_interval = int(os.getenv('POLL_INTERVAL', '12'))
