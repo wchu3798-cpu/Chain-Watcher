@@ -50,7 +50,7 @@ export default function Dashboard() {
               placeholder="Admin Password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full h-10 px-3 bg-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/20"
+              className="w-full h-10 px-3 bg-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/20 text-white"
               autoFocus
             />
             <Button type="submit" className="w-full">
@@ -61,6 +61,28 @@ export default function Dashboard() {
       </div>
     );
   }
+
+  const handleClearLogs = async () => {
+    try {
+      await apiRequest("DELETE", "/api/logs");
+      queryClient.invalidateQueries({ queryKey: ["/api/logs"] });
+      toast({
+        title: "Logs cleared",
+        description: "Dashboard history has been reset.",
+      });
+    } catch (err) {
+      toast({
+        title: "Error",
+        description: "Failed to clear logs.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Calculate simple stats from logs
+  const errorCount = logs?.filter(l => l.level === "ERROR").length || 0;
+  const warnCount = logs?.filter(l => l.level === "WARN").length || 0;
+  const lastActive = logs?.[0]?.createdAt ? new Date(logs[0].createdAt).toLocaleTimeString() : "--";
 
   return (
     <div className="min-h-screen bg-background flex flex-col font-sans overflow-y-auto overflow-x-hidden">
