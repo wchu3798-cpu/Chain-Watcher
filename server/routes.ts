@@ -52,6 +52,20 @@ export async function registerRoutes(
 ): Promise<Server> {
   
   // API Routes
+  app.use(api.logs.list.path, (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    const password = process.env.ADMIN_PASSWORD;
+
+    if (!password) {
+      return next(); // Fallback for development if secret not set
+    }
+
+    if (!authHeader || authHeader !== `Bearer ${password}`) {
+      return res.status(401).json({ message: "Unauthorized: Invalid admin password" });
+    }
+    next();
+  });
+
   app.get(api.logs.list.path, async (req, res) => {
     const logs = await storage.getLogs();
     res.json(logs);

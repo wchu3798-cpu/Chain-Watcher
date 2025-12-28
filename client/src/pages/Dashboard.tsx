@@ -12,39 +12,55 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
 export default function Dashboard() {
+  const [password, setPassword] = useState(localStorage.getItem("admin_password") || "");
+  const [isAuthenticated, setIsAuthenticated] = useState(!!password);
   const { data: logs, isLoading, error, hideClean, setHideClean } = useLogs();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const { toast } = useToast();
 
-  // Handle auto-scroll
   useEffect(() => {
-    if (autoScroll && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [logs, autoScroll]);
+    const handleUnauthorized = () => {
+      setIsAuthenticated(false);
+      localStorage.removeItem("admin_password");
+    };
+    window.addEventListener("api-unauthorized", handleUnauthorized);
+    return () => window.removeEventListener("api-unauthorized", handleUnauthorized);
+  }, []);
 
-  const handleClearLogs = async () => {
-    try {
-      await apiRequest("DELETE", "/api/logs");
-      queryClient.invalidateQueries({ queryKey: ["/api/logs"] });
-      toast({
-        title: "Logs cleared",
-        description: "Dashboard history has been reset.",
-      });
-    } catch (err) {
-      toast({
-        title: "Error",
-        description: "Failed to clear logs.",
-        variant: "destructive",
-      });
-    }
-  };
-
-  // Calculate simple stats from logs
-  const errorCount = logs?.filter(l => l.level === "ERROR").length || 0;
-  const warnCount = logs?.filter(l => l.level === "WARN").length || 0;
-  const lastActive = logs?.[0]?.createdAt ? new Date(logs[0].createdAt).toLocaleTimeString() : "--";
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <div className="w-full max-w-md space-y-8 bg-card p-8 border border-border rounded-xl shadow-2xl">
+          <div className="text-center">
+            <Terminal className="w-12 h-12 mx-auto text-primary mb-4" />
+            <h2 className="text-2xl font-bold tracking-tight">Admin Access Required</h2>
+            <p className="text-muted-foreground mt-2">Enter your password to view live monitoring data</p>
+          </div>
+          <form 
+            onSubmit={(e) => {
+              e.preventDefault();
+              localStorage.setItem("admin_password", password);
+              setIsAuthenticated(true);
+            }}
+            className="space-y-4"
+          >
+            <input
+              type="password"
+              placeholder="Admin Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full h-10 px-3 bg-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/20"
+              autoFocus
+            />
+            <Button type="submit" className="w-full">
+              Access Dashboard
+            </Button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background flex flex-col font-sans overflow-y-auto overflow-x-hidden">
