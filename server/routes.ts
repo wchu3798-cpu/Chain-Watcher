@@ -51,6 +51,18 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
   
+  // Middleware to block banned IPs
+  app.use(async (req, res, next) => {
+    const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "0.0.0.0");
+    const visitorList = await storage.getVisitors();
+    const isBanned = visitorList.some(v => v.ip === ip && v.isBanned === "true");
+    
+    if (isBanned && !req.path.startsWith("/api/honeypot")) {
+      return res.status(403).send("Access Denied: Your IP has been flagged for suspicious activity.");
+    }
+    next();
+  });
+
   // API Routes
   app.get(api.logs.list.path, async (req, res) => {
     const logs = await storage.getLogs();
@@ -60,6 +72,20 @@ export async function registerRoutes(
   app.get("/api/visitors", async (req, res) => {
     const visitorList = await storage.getVisitors();
     res.json(visitorList);
+  });
+
+  app.get("/api/honeypot-secret-trap", async (req, res) => {
+    const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "0.0.0.0");
+    await storage.recordVisitor({
+      ip,
+      userAgent: req.headers["user-agent"] || "bot-trap",
+      isBot: "true"
+    });
+    // This is the DatabaseStorage instance, we need to add banVisitor to interface if not there
+    if ("banVisitor" in storage) {
+      await (storage as any).banVisitor(ip);
+    }
+    res.status(403).send("Banned.");
   });
 
   app.post("/api/visitors/track", async (req, res) => {

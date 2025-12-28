@@ -15,6 +15,7 @@ export const visitors = pgTable("visitors", {
   ip: text("ip").notNull(),
   userAgent: text("user_agent").notNull(),
   isBot: text("is_bot").notNull(), // "true" or "false"
+  isBanned: text("is_banned").notNull().default("false"), // "true" or "false"
   lastSeen: timestamp("last_seen").defaultNow(),
 });
 

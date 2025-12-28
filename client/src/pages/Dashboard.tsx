@@ -65,9 +65,21 @@ export default function Dashboard() {
   
   const realUsers = visitors?.filter(v => v.isBot === "false").length || 0;
   const botCount = visitors?.filter(v => v.isBot === "true").length || 0;
+  const bannedCount = visitors?.filter(v => v.isBanned === "true").length || 0;
 
   return (
-    <div className="min-h-screen bg-background flex flex-col font-sans overflow-y-auto overflow-x-hidden">
+    <div className="min-h-screen bg-background flex flex-col font-sans overflow-y-auto overflow-x-hidden relative">
+      {/* Hidden Honeypot for Bots */}
+      <a 
+        href="/api/honeypot-secret-trap" 
+        className="absolute opacity-0 pointer-events-none" 
+        style={{ width: '1px', height: '1px' }}
+        tabIndex={-1}
+        aria-hidden="true"
+      >
+        Admin Login
+      </a>
+      
       <Header />
       
       <main className="flex-1 p-6 grid grid-cols-1 lg:grid-cols-4 gap-6 max-w-[2000px] mx-auto w-full">
@@ -103,9 +115,15 @@ export default function Dashboard() {
                   <Bot className="w-4 h-4" />
                   <span className="text-xl font-bold font-mono">{botCount}</span>
                 </div>
-                <span className="text-[10px] uppercase tracking-tighter text-muted-foreground font-bold">Bots/Crawlers</span>
+                <span className="text-[10px] uppercase tracking-tighter text-muted-foreground font-bold">Bots detected</span>
               </div>
             </div>
+            {bannedCount > 0 && (
+              <div className="mt-4 pt-4 border-t border-border flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-tighter text-destructive font-bold">Trap triggered / Banned</span>
+                <span className="text-sm font-bold font-mono text-destructive">{bannedCount}</span>
+              </div>
+            )}
           </div>
           
           <div className="flex-1 min-h-0 bg-card border border-border rounded-xl flex flex-col shadow-2xl overflow-hidden">

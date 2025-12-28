@@ -42,7 +42,11 @@ export class DatabaseStorage implements IStorage {
 
     if (existing) {
       const [updated] = await db.update(visitors)
-        .set({ lastSeen: new Date(), userAgent: visitor.userAgent })
+        .set({ 
+          lastSeen: new Date(), 
+          userAgent: visitor.userAgent,
+          // Don't override isBanned if it's already true
+        })
         .where(eq(visitors.id, existing.id))
         .returning();
       return updated;
@@ -50,6 +54,12 @@ export class DatabaseStorage implements IStorage {
 
     const [newVisitor] = await db.insert(visitors).values(visitor).returning();
     return newVisitor;
+  }
+
+  async banVisitor(ip: string): Promise<void> {
+    await db.update(visitors)
+      .set({ isBanned: "true", isBot: "true" })
+      .where(eq(visitors.ip, ip));
   }
 }
 
