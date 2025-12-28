@@ -10,10 +10,25 @@ export const monitoringLogs = pgTable("monitoring_logs", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const visitors = pgTable("visitors", {
+  id: serial("id").primaryKey(),
+  ip: text("ip").notNull(),
+  userAgent: text("user_agent").notNull(),
+  isBot: text("is_bot").notNull(), // "true" or "false"
+  lastSeen: timestamp("last_seen").defaultNow(),
+});
+
 export const insertLogSchema = createInsertSchema(monitoringLogs).omit({ 
   id: true, 
   createdAt: true 
 });
 
+export const insertVisitorSchema = createInsertSchema(visitors).omit({
+  id: true,
+  lastSeen: true
+});
+
 export type Log = typeof monitoringLogs.$inferSelect;
 export type InsertLog = z.infer<typeof insertLogSchema>;
+export type Visitor = typeof visitors.$inferSelect;
+export type InsertVisitor = z.infer<typeof insertVisitorSchema>;

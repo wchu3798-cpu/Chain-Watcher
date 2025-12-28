@@ -57,6 +57,27 @@ export async function registerRoutes(
     res.json(logs);
   });
 
+  app.get("/api/visitors", async (req, res) => {
+    const visitorList = await storage.getVisitors();
+    res.json(visitorList);
+  });
+
+  app.post("/api/visitors/track", async (req, res) => {
+    const userAgent = req.headers["user-agent"] || "unknown";
+    const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "0.0.0.0";
+    
+    // Simple bot detection
+    const isBot = /bot|crawler|spider|crawling|googlebot|bingbot|yandex|baidu|slurp|duckduckbot/i.test(userAgent);
+    
+    const visitor = await storage.recordVisitor({
+      ip: String(ip),
+      userAgent,
+      isBot: isBot ? "true" : "false"
+    });
+    
+    res.json(visitor);
+  });
+
   app.delete(api.logs.clear.path, async (req, res) => {
     await storage.clearLogs();
     res.status(204).end();

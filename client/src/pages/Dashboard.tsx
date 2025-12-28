@@ -4,18 +4,36 @@ import { StatusCard } from "@/components/StatusCard";
 import { AnomalyWindow } from "@/components/AnomalyWindow";
 import { Visualizer } from "@/components/Visualizer";
 import { useLogs } from "@/hooks/use-logs";
-import { Activity, Server, Clock, Database, Terminal, Trash2, BarChart3, Filter } from "lucide-react";
+import { Activity, Server, Clock, Database, Terminal, Trash2, BarChart3, Filter, Users, UserCheck, Bot } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useQuery } from "@tanstack/react-query";
+import { type Visitor } from "@shared/schema";
 
 export default function Dashboard() {
   const { data: logs, isLoading, error, hideClean, setHideClean } = useLogs();
+  const { data: visitors } = useQuery<Visitor[]>({ 
+    queryKey: ["/api/visitors"],
+    refetchInterval: 5000 
+  });
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const { toast } = useToast();
+
+  // Track current visitor
+  useEffect(() => {
+    const trackVisitor = async () => {
+      try {
+        await apiRequest("POST", "/api/visitors/track");
+      } catch (e) {
+        console.error("Visitor tracking failed", e);
+      }
+    };
+    trackVisitor();
+  }, []);
 
   // Handle auto-scroll
   useEffect(() => {
@@ -41,10 +59,12 @@ export default function Dashboard() {
     }
   };
 
-  // Calculate simple stats from logs
+  // Calculate stats
   const errorCount = logs?.filter(l => l.level === "ERROR").length || 0;
   const warnCount = logs?.filter(l => l.level === "WARN").length || 0;
-  const lastActive = logs?.[0]?.createdAt ? new Date(logs[0].createdAt).toLocaleTimeString() : "--";
+  
+  const realUsers = visitors?.filter(v => v.isBot === "false").length || 0;
+  const botCount = visitors?.filter(v => v.isBot === "true").length || 0;
 
   return (
     <div className="min-h-screen bg-background flex flex-col font-sans overflow-y-auto overflow-x-hidden">
@@ -64,6 +84,28 @@ export default function Dashboard() {
               value={errorCount > 0 ? "CRITICAL" : warnCount > 0 ? "ELEVATED" : "NORMAL"} 
               status={errorCount > 0 ? "warning" : "active"} 
             />
+          </div>
+
+          <div className="bg-card border border-border rounded-xl p-4 shadow-xl">
+            <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-4 flex items-center gap-2">
+              <Users className="w-3 h-3" /> Audience Analysis
+            </h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-1.5 text-emerald-400">
+                  <UserCheck className="w-4 h-4" />
+                  <span className="text-xl font-bold font-mono">{realUsers}</span>
+                </div>
+                <span className="text-[10px] uppercase tracking-tighter text-muted-foreground font-bold">Real Humans</span>
+              </div>
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-1.5 text-amber-400">
+                  <Bot className="w-4 h-4" />
+                  <span className="text-xl font-bold font-mono">{botCount}</span>
+                </div>
+                <span className="text-[10px] uppercase tracking-tighter text-muted-foreground font-bold">Bots/Crawlers</span>
+              </div>
+            </div>
           </div>
           
           <div className="flex-1 min-h-0 bg-card border border-border rounded-xl flex flex-col shadow-2xl overflow-hidden">
