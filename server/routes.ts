@@ -74,6 +74,18 @@ export async function registerRoutes(
     res.json(visitorList);
   });
 
+  app.post("/api/capture-email", async (req, res) => {
+    const { email, referrer } = req.body;
+    if (!email || !email.includes("@")) {
+      return res.status(400).json({ error: "Invalid email" });
+    }
+    const captured = await storage.captureEmail({
+      email,
+      referrer: referrer || req.headers["referer"] || "direct",
+    });
+    res.json(captured);
+  });
+
   app.get("/api/honeypot-secret-trap", async (req, res) => {
     const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "0.0.0.0");
     await storage.recordVisitor({

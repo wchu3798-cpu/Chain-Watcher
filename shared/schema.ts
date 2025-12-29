@@ -24,6 +24,21 @@ export const insertLogSchema = createInsertSchema(monitoringLogs).omit({
   createdAt: true 
 });
 
+export const capturedEmails = pgTable("captured_emails", {
+  id: serial("id").primaryKey(),
+  email: text("email").notNull(),
+  timestamp: timestamp("timestamp").defaultNow(),
+  referrer: text("referrer"),
+});
+
+export const insertEmailSchema = createInsertSchema(capturedEmails).omit({
+  id: true,
+  timestamp: true,
+});
+
+export type CapturedEmail = typeof capturedEmails.$inferSelect;
+export type InsertEmail = z.infer<typeof insertEmailSchema>;
+
 export const insertVisitorSchema = createInsertSchema(visitors).omit({
   id: true,
   lastSeen: true

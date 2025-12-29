@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { monitoringLogs, visitors, type InsertLog, type Log, type Visitor, type InsertVisitor } from "@shared/schema";
+import { monitoringLogs, visitors, capturedEmails, type InsertLog, type Log, type Visitor, type InsertVisitor, type InsertEmail, type CapturedEmail } from "@shared/schema";
 import { eq, desc } from "drizzle-orm";
 
 export interface IStorage {
@@ -10,6 +10,9 @@ export interface IStorage {
   // Visitor tracking
   getVisitors(): Promise<Visitor[]>;
   recordVisitor(visitor: InsertVisitor): Promise<Visitor>;
+
+  // Email capture
+  captureEmail(email: InsertEmail): Promise<CapturedEmail>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -18,6 +21,11 @@ export class DatabaseStorage implements IStorage {
       .from(monitoringLogs)
       .orderBy(desc(monitoringLogs.createdAt))
       .limit(500);
+  }
+
+  async captureEmail(email: InsertEmail): Promise<CapturedEmail> {
+    const [newEmail] = await db.insert(capturedEmails).values(email).returning();
+    return newEmail;
   }
 
   async createLog(log: InsertLog): Promise<Log> {

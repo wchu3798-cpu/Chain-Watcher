@@ -1,0 +1,89 @@
+<!-- EMAIL CAPTURE BANNER - Paste this at the very top of your page -->
+<div id="email-banner" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; text-align: center; position: sticky; top: 0; z-index: 1000; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
+  <div style="max-width: 800px; margin: 0 auto;">
+    <p style="margin: 0 0 10px 0; font-size: 18px; font-weight: bold;">
+      🚀 77+ teams monitoring blockchain threats with Chain Watcher
+    </p>
+    <p style="margin: 0 0 15px 0; font-size: 14px; opacity: 0.9;">
+      Get notified when we detect suspicious activity on your addresses
+    </p>
+    <div style="display: flex; gap: 10px; justify-content: center; align-items: center; flex-wrap: wrap;">
+      <input 
+        id="email-input"
+        type="email" 
+        placeholder="your@email.com" 
+        style="padding: 12px 20px; width: 280px; border-radius: 6px; border: none; font-size: 14px;"
+      >
+      <button 
+        onclick="captureEmail()"
+        style="background: white; color: #667eea; padding: 12px 30px; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 14px; transition: transform 0.2s;"
+        onmouseover="this.style.transform='scale(1.05)'"
+        onmouseout="this.style.transform='scale(1)'"
+      >
+        Get Alerts
+      </button>
+      <button 
+        onclick="document.getElementById('email-banner').style.display='none'"
+        style="background: transparent; color: white; padding: 12px 20px; border: 1px solid white; border-radius: 6px; cursor: pointer; font-size: 14px;"
+      >
+        Maybe Later
+      </button>
+    </div>
+    <p style="margin: 10px 0 0 0; font-size: 11px; opacity: 0.7;">
+      Free forever • No spam • Unsubscribe anytime
+    </p>
+  </div>
+</div>
+
+<script>
+function captureEmail() {
+  const email = document.getElementById('email-input').value;
+  
+  // Basic email validation
+  if (!email || !email.includes('@')) {
+    alert('Please enter a valid email address');
+    return;
+  }
+  
+  // Save to localStorage (temporary - we'll upgrade this)
+  const emails = JSON.parse(localStorage.getItem('chainwatcher_emails') || '[]');
+  
+  if (!emails.includes(email)) {
+    emails.push({
+      email: email,
+      timestamp: new Date().toISOString(),
+      source: document.referrer || 'direct'
+    });
+    localStorage.setItem('chainwatcher_emails', JSON.stringify(emails));
+    
+    // Also send to your backend (add this endpoint later)
+    fetch('/api/capture-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        email: email,
+        timestamp: new Date().toISOString(),
+        referrer: document.referrer
+      })
+    }).catch(err => console.log('Backend not ready yet, saved locally'));
+  }
+  
+  // Show success message
+  document.getElementById('email-banner').innerHTML = `
+    <div style="padding: 20px;">
+      <p style="margin: 0; font-size: 20px;">✅ You're in!</p>
+      <p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.9;">
+        We'll email you at <strong>${email}</strong> when we detect threats.
+      </p>
+    </div>
+  `;
+  
+  // Track the conversion
+  console.log('Email captured:', email);
+  
+  // Hide banner after 3 seconds
+  setTimeout(() => {
+    document.getElementById('email-banner').style.display = 'none';
+  }, 3000);
+}
+</script>

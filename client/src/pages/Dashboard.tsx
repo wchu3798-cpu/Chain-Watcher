@@ -13,6 +13,91 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 import { type Visitor } from "@shared/schema";
 
+function EmailBanner() {
+  const [email, setEmail] = useState("");
+  const [status, setStatus] = useState<"idle" | "loading" | "success" | "hidden">("idle");
+  const { toast } = useToast();
+
+  const handleCapture = async () => {
+    if (!email || !email.includes("@")) {
+      toast({ title: "Invalid email", variant: "destructive" });
+      return;
+    }
+    setStatus("loading");
+    try {
+      await apiRequest("POST", "/api/capture-email", { 
+        email, 
+        referrer: document.referrer || "direct" 
+      });
+      // Save locally as well as requested
+      const emails = JSON.parse(localStorage.getItem('chainwatcher_emails') || '[]');
+      if (!emails.some((e: any) => e.email === email)) {
+        emails.push({ email, timestamp: new Date().toISOString() });
+        localStorage.setItem('chainwatcher_emails', JSON.stringify(emails));
+      }
+      setStatus("success");
+      setTimeout(() => setStatus("hidden"), 3000);
+    } catch (e) {
+      console.error(e);
+      setStatus("idle");
+      toast({ title: "Failed to save email", variant: "destructive" });
+    }
+  };
+
+  if (status === "hidden") return null;
+
+  return (
+    <div id="email-banner" style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }} className="text-white p-5 text-center sticky top-0 z-[1000] shadow-lg">
+      <div className="max-w-[800px] mx-auto">
+        {status === "success" ? (
+          <div className="py-2">
+            <p className="text-xl font-bold">✅ You're in!</p>
+            <p className="mt-2 text-sm opacity-90">
+              We'll email you at <strong>{email}</strong> when we detect threats.
+            </p>
+          </div>
+        ) : (
+          <>
+            <p className="m-0 text-lg font-bold">
+              🚀 77+ teams monitoring blockchain threats with Chain Watcher
+            </p>
+            <p className="mt-0 mb-4 text-sm opacity-90">
+              Get notified when we detect suspicious activity on your addresses
+            </p>
+            <div className="flex gap-2.5 justify-center items-center flex-wrap">
+              <input 
+                type="email" 
+                placeholder="your@email.com" 
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="py-3 px-5 w-[280px] rounded-md border-none text-sm text-black"
+                disabled={status === "loading"}
+              />
+              <Button 
+                onClick={handleCapture}
+                disabled={status === "loading"}
+                className="bg-white text-[#667eea] py-3 px-8 rounded-md font-bold text-sm hover:scale-105 transition-transform h-auto"
+              >
+                {status === "loading" ? "Processing..." : "Get Alerts"}
+              </Button>
+              <Button 
+                variant="outline"
+                onClick={() => setStatus("hidden")}
+                className="bg-transparent text-white border-white py-3 px-5 rounded-md text-sm hover:bg-white/10 h-auto"
+              >
+                Maybe Later
+              </Button>
+            </div>
+            <p className="mt-2.5 text-[11px] opacity-70">
+              Free forever • No spam • Unsubscribe anytime
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const { data: logs, isLoading, error, hideClean, setHideClean } = useLogs();
   const { data: visitors } = useQuery<Visitor[]>({ 
@@ -80,6 +165,7 @@ export default function Dashboard() {
         Admin Login
       </a>
       
+      <EmailBanner />
       <Header />
       
       <main className="flex-1 p-6 grid grid-cols-1 lg:grid-cols-4 gap-6 max-w-[2000px] mx-auto w-full">
