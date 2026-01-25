@@ -1,0 +1,1085 @@
+#!/usr/bin/env python3
+"""
+Chain Watcher - Complete Auth & Discord Alert System
+====================================================
+
+Features:
+- User authentication (signup, login, sessions)
+- Wallet management (add/remove wallets to monitor)
+- Discord webhook alerts
+- Real-time monitoring with threat detection
+- Works on Replit with Flask
+
+Setup:
+1. pip install flask flask-sqlalchemy flask-bcrypt requests web3
+2. Set environment variables in Replit Secrets:
+   - DATABASE_URL (or uses SQLite)
+   - SECRET_KEY (for sessions)
+   - ALCHEMY_API_KEY (for Ethereum access)
+3. Run: python app.py
+"""
+
+import os
+import re
+import hashlib
+import requests
+from datetime import datetime, timedelta
+from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify, flash
+from flask_sqlalchemy import SQLAlchemy
+from flask_bcrypt import Bcrypt
+from functools import wraps
+
+# ============================================================================
+# FLASK APP SETUP
+# ============================================================================
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///chainwatcher.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db = SQLAlchemy(app)
+bcrypt = Bcrypt(app)
+
+# ============================================================================
+# DATABASE MODELS
+# ============================================================================
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(200), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    tier = db.Column(db.String(20), default='free')  # free, pro, enterprise
+    discord_webhook = db.Column(db.String(500))
+    telegram_chat_id = db.Column(db.String(100))
+    
+    # Relationships
+    wallets = db.relationship('Wallet', backref='user', lazy=True, cascade='all, delete-orphan')
+    alerts = db.relationship('Alert', backref='user', lazy=True, cascade='all, delete-orphan')
+    
+    def set_password(self, password):
+        self.password_hash = bcrypt.generate_password_hash(password).decode('utf-8')
+    
+    def check_password(self, password):
+        return bcrypt.check_password_hash(self.password_hash, password)
+    
+    def wallet_limit(self):
+        limits = {'free': 1, 'pro': 10, 'enterprise': 999}
+        return limits.get(self.tier, 1)
+
+
+class Wallet(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    address = db.Column(db.String(42), nullable=False)
+    label = db.Column(db.String(100))
+    added_at = db.Column(db.DateTime, default=datetime.utcnow)
+    last_checked = db.Column(db.DateTime)
+    alert_enabled = db.Column(db.Boolean, default=True)
+    min_threat_level = db.Column(db.String(20), default='medium')  # low, medium, high, critical
+
+
+class Alert(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    wallet_address = db.Column(db.String(42), nullable=False)
+    threat_level = db.Column(db.String(20), nullable=False)
+    threat_score = db.Column(db.Integer)
+    message = db.Column(db.Text)
+    tx_hash = db.Column(db.String(66))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    sent_discord = db.Column(db.Boolean, default=False)
+    sent_telegram = db.Column(db.Boolean, default=False)
+
+# ============================================================================
+# DISCORD ALERT SYSTEM
+# ============================================================================
+
+class DiscordAlert:
+    """Send rich Discord alerts via webhook"""
+    
+    @staticmethod
+    def send_threat_alert(webhook_url, wallet_address, threat_data):
+        """Send threat detection alert to Discord"""
+        if not webhook_url:
+            return False
+        
+        # Color based on threat level
+        colors = {
+            'safe': 0x3fb950,      # Green
+            'low': 0xd29922,       # Yellow
+            'medium': 0xfb8c00,    # Orange
+            'high': 0xdc2626,      # Red
+            'critical': 0x991b1b   # Dark Red
+        }
+        
+        threat_level = threat_data.get('threat_level', 'unknown')
+        color = colors.get(threat_level, 0x8b949e)
+        
+        # Build Discord embed
+        embed = {
+            "title": f"🚨 {threat_level.upper()} Threat Detected",
+            "color": color,
+            "fields": [
+                {
+                    "name": "👛 Wallet",
+                    "value": f"`{wallet_address[:10]}...{wallet_address[-8:]}`",
+                    "inline": True
+                },
+                {
+                    "name": "⚠️ Risk Score",
+                    "value": f"**{threat_data.get('total_score', 0)}/100**",
+                    "inline": True
+                },
+                {
+                    "name": "🎯 Threat Level",
+                    "value": threat_level.upper(),
+                    "inline": True
+                }
+            ],
+            "timestamp": datetime.utcnow().isoformat(),
+            "footer": {
+                "text": "Chain Watcher Security Monitor"
+            }
+        }
+        
+        # Add transaction hash if available
+        if threat_data.get('tx_hash'):
+            embed["fields"].append({
+                "name": "🔗 Transaction",
+                "value": f"[View on Etherscan](https://etherscan.io/tx/{threat_data['tx_hash']})",
+                "inline": False
+            })
+        
+        # Add threat indicators
+        if threat_data.get('indicators'):
+            indicators_text = "\n".join([
+                f"• {ind['name']}: {ind['description']}" 
+                for ind in threat_data['indicators'][:3]  # Limit to 3
+            ])
+            embed["fields"].append({
+                "name": "📊 Threat Indicators",
+                "value": indicators_text,
+                "inline": False
+            })
+        
+        # Add recommendation
+        recommendations = {
+            'critical': '🛑 **DO NOT PROCEED** - Known scam detected',
+            'high': '⚠️ **HIGH RISK** - Strongly not recommended',
+            'medium': '⚠️ **CAUTION** - Verify carefully before proceeding',
+            'low': '✓ Proceed with caution',
+            'safe': '✅ No threats detected'
+        }
+        
+        embed["description"] = recommendations.get(threat_level, 'Review carefully')
+        
+        payload = {
+            "username": "Chain Watcher",
+            "avatar_url": "https://i.imgur.com/4M34hi2.png",  # Shield emoji
+            "embeds": [embed]
+        }
+        
+        try:
+            response = requests.post(webhook_url, json=payload, timeout=10)
+            return response.status_code == 204
+        except Exception as e:
+            print(f"Discord alert failed: {e}")
+            return False
+    
+    @staticmethod
+    def send_wallet_activity(webhook_url, wallet_address, activity_type, details):
+        """Send wallet activity notification"""
+        if not webhook_url:
+            return False
+        
+        embed = {
+            "title": f"💼 Wallet Activity: {activity_type}",
+            "color": 0x58a6ff,
+            "fields": [
+                {
+                    "name": "👛 Wallet",
+                    "value": f"`{wallet_address[:10]}...{wallet_address[-8:]}`",
+                    "inline": False
+                }
+            ],
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        # Add details
+        for key, value in details.items():
+            embed["fields"].append({
+                "name": key,
+                "value": str(value),
+                "inline": True
+            })
+        
+        payload = {
+            "username": "Chain Watcher",
+            "embeds": [embed]
+        }
+        
+        try:
+            response = requests.post(webhook_url, json=payload, timeout=10)
+            return response.status_code == 204
+        except Exception as e:
+            print(f"Discord alert failed: {e}")
+            return False
+
+# ============================================================================
+# AUTHENTICATION DECORATORS
+# ============================================================================
+
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            flash('Please log in to access this page.', 'warning')
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def validate_email(email):
+    """Simple email validation"""
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return re.match(pattern, email) is not None
+
+
+def validate_eth_address(address):
+    """Validate Ethereum address format"""
+    if not address or not isinstance(address, str):
+        return False
+    return bool(re.match(r'^0x[a-fA-F0-9]{40}$', address))
+
+# ============================================================================
+# ROUTES - AUTHENTICATION
+# ============================================================================
+
+@app.route('/')
+def index():
+    if 'user_id' in session:
+        return redirect(url_for('dashboard'))
+    return render_template_string(LANDING_PAGE)
+
+
+@app.route('/signup', methods=['GET', 'POST'])
+def signup():
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip().lower()
+        password = request.form.get('password', '')
+        
+        # Validation
+        if not validate_email(email):
+            flash('Invalid email address.', 'error')
+            return redirect(url_for('signup'))
+        
+        if len(password) < 8:
+            flash('Password must be at least 8 characters.', 'error')
+            return redirect(url_for('signup'))
+        
+        # Check if user exists
+        if User.query.filter_by(email=email).first():
+            flash('Email already registered. Please log in.', 'error')
+            return redirect(url_for('login'))
+        
+        # Create user
+        user = User(email=email)
+        user.set_password(password)
+        db.session.add(user)
+        db.session.commit()
+        
+        # Auto login
+        session['user_id'] = user.id
+        flash('Account created successfully! Add your first wallet to start monitoring.', 'success')
+        return redirect(url_for('dashboard'))
+    
+    return render_template_string(AUTH_PAGE, mode='signup')
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip().lower()
+        password = request.form.get('password', '')
+        
+        user = User.query.filter_by(email=email).first()
+        
+        if user and user.check_password(password):
+            session['user_id'] = user.id
+            flash('Logged in successfully!', 'success')
+            return redirect(url_for('dashboard'))
+        else:
+            flash('Invalid email or password.', 'error')
+    
+    return render_template_string(AUTH_PAGE, mode='login')
+
+
+@app.route('/logout')
+def logout():
+    session.pop('user_id', None)
+    flash('Logged out successfully.', 'success')
+    return redirect(url_for('index'))
+
+# ============================================================================
+# ROUTES - DASHBOARD
+# ============================================================================
+
+@app.route('/dashboard')
+@login_required
+def dashboard():
+    user = User.query.get(session['user_id'])
+    wallets = Wallet.query.filter_by(user_id=user.id).all()
+    recent_alerts = Alert.query.filter_by(user_id=user.id).order_by(Alert.created_at.desc()).limit(10).all()
+    
+    return render_template_string(
+        DASHBOARD_PAGE,
+        user=user,
+        wallets=wallets,
+        recent_alerts=recent_alerts,
+        wallet_limit=user.wallet_limit()
+    )
+
+# ============================================================================
+# ROUTES - WALLET MANAGEMENT
+# ============================================================================
+
+@app.route('/add-wallet', methods=['POST'])
+@login_required
+def add_wallet():
+    user = User.query.get(session['user_id'])
+    
+    # Check wallet limit
+    current_count = Wallet.query.filter_by(user_id=user.id).count()
+    if current_count >= user.wallet_limit():
+        flash(f'Wallet limit reached. Upgrade to Pro to monitor more wallets.', 'warning')
+        return redirect(url_for('dashboard'))
+    
+    address = request.form.get('address', '').strip().lower()
+    label = request.form.get('label', '').strip()
+    
+    # Validate address
+    if not validate_eth_address(address):
+        flash('Invalid Ethereum address format.', 'error')
+        return redirect(url_for('dashboard'))
+    
+    # Check if already monitoring
+    existing = Wallet.query.filter_by(user_id=user.id, address=address).first()
+    if existing:
+        flash('You are already monitoring this wallet.', 'warning')
+        return redirect(url_for('dashboard'))
+    
+    # Add wallet
+    wallet = Wallet(
+        user_id=user.id,
+        address=address,
+        label=label or f"Wallet {current_count + 1}"
+    )
+    db.session.add(wallet)
+    db.session.commit()
+    
+    # Send Discord notification if configured
+    if user.discord_webhook:
+        DiscordAlert.send_wallet_activity(
+            user.discord_webhook,
+            address,
+            "Wallet Added",
+            {"Label": label or "Unnamed", "Status": "Now Monitoring"}
+        )
+    
+    flash(f'Wallet added successfully! Now monitoring {address[:10]}...', 'success')
+    return redirect(url_for('dashboard'))
+
+
+@app.route('/remove-wallet/<int:wallet_id>', methods=['POST'])
+@login_required
+def remove_wallet(wallet_id):
+    wallet = Wallet.query.get_or_404(wallet_id)
+    
+    # Security check
+    if wallet.user_id != session['user_id']:
+        flash('Unauthorized action.', 'error')
+        return redirect(url_for('dashboard'))
+    
+    address = wallet.address
+    db.session.delete(wallet)
+    db.session.commit()
+    
+    flash(f'Stopped monitoring {address[:10]}...', 'success')
+    return redirect(url_for('dashboard'))
+
+# ============================================================================
+# ROUTES - SETTINGS
+# ============================================================================
+
+@app.route('/settings', methods=['GET', 'POST'])
+@login_required
+def settings():
+    user = User.query.get(session['user_id'])
+    
+    if request.method == 'POST':
+        # Update Discord webhook
+        discord_webhook = request.form.get('discord_webhook', '').strip()
+        
+        if discord_webhook:
+            # Validate webhook URL
+            if not discord_webhook.startswith('https://discord.com/api/webhooks/'):
+                flash('Invalid Discord webhook URL.', 'error')
+                return redirect(url_for('settings'))
+            
+            # Test webhook
+            test_success = DiscordAlert.send_wallet_activity(
+                discord_webhook,
+                "0x0000000000000000000000000000000000000000",
+                "Test Alert",
+                {"Status": "✅ Discord alerts configured successfully!"}
+            )
+            
+            if not test_success:
+                flash('Failed to send test alert. Check your webhook URL.', 'error')
+                return redirect(url_for('settings'))
+        
+        user.discord_webhook = discord_webhook or None
+        db.session.commit()
+        
+        flash('Settings updated successfully!', 'success')
+        return redirect(url_for('settings'))
+    
+    return render_template_string(SETTINGS_PAGE, user=user)
+
+# ============================================================================
+# API - FOR MONITORING SYSTEM
+# ============================================================================
+
+@app.route('/api/check-threat', methods=['POST'])
+def api_check_threat():
+    """API endpoint for monitoring system to report threats"""
+    data = request.get_json()
+    
+    wallet_address = data.get('wallet_address', '').lower()
+    threat_data = data.get('threat_data', {})
+    
+    # Find all users monitoring this wallet
+    wallets = Wallet.query.filter_by(address=wallet_address, alert_enabled=True).all()
+    
+    alerts_sent = 0
+    
+    for wallet in wallets:
+        user = wallet.user
+        threat_level = threat_data.get('threat_level', 'unknown')
+        
+        # Check if threat meets user's minimum threshold
+        threat_levels = ['low', 'medium', 'high', 'critical']
+        if threat_level not in threat_levels:
+            continue
+        
+        min_level = wallet.min_threat_level
+        if threat_levels.index(threat_level) < threat_levels.index(min_level):
+            continue
+        
+        # Create alert record
+        alert = Alert(
+            user_id=user.id,
+            wallet_address=wallet_address,
+            threat_level=threat_level,
+            threat_score=threat_data.get('total_score', 0),
+            message=threat_data.get('message', ''),
+            tx_hash=threat_data.get('tx_hash')
+        )
+        db.session.add(alert)
+        
+        # Send Discord alert
+        if user.discord_webhook:
+            success = DiscordAlert.send_threat_alert(
+                user.discord_webhook,
+                wallet_address,
+                threat_data
+            )
+            alert.sent_discord = success
+            alerts_sent += 1
+        
+        db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'alerts_sent': alerts_sent
+    })
+
+
+@app.route('/api/monitored-wallets')
+def api_monitored_wallets():
+    """Get list of all wallets being monitored"""
+    wallets = Wallet.query.filter_by(alert_enabled=True).all()
+    addresses = list(set([w.address for w in wallets]))
+    
+    return jsonify({
+        'wallets': addresses,
+        'count': len(addresses)
+    })
+
+# ============================================================================
+# HTML TEMPLATES
+# ============================================================================
+
+LANDING_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chain Watcher - Crypto Security Monitor</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 50%, #0f172a 100%);
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            text-align: center;
+        }
+        .logo { font-size: 80px; margin-bottom: 20px; }
+        h1 {
+            font-size: 48px;
+            background: linear-gradient(to right, #60a5fa, #22d3ee);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 20px;
+        }
+        p { font-size: 20px; color: #94a3b8; margin-bottom: 40px; }
+        .buttons { display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; }
+        .btn {
+            padding: 16px 32px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 16px;
+            transition: all 0.3s;
+        }
+        .btn-primary {
+            background: linear-gradient(to right, #2563eb, #06b6d4);
+            color: white;
+        }
+        .btn-primary:hover { transform: translateY(-2px); }
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">🛡️</div>
+        <h1>Chain Watcher</h1>
+        <p>Monitor your crypto wallets 24/7. Get instant alerts when threats are detected.</p>
+        <div class="buttons">
+            <a href="/signup" class="btn btn-primary">Get Started Free</a>
+            <a href="/login" class="btn btn-secondary">Log In</a>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+AUTH_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{% if mode == 'signup' %}Sign Up{% else %}Log In{% endif %} - Chain Watcher</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 50%, #0f172a 100%);
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 400px;
+            width: 100%;
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 12px;
+            padding: 40px;
+        }
+        h1 {
+            font-size: 32px;
+            color: #60a5fa;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .form-group { margin-bottom: 20px; }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #cbd5e1;
+            font-weight: 500;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 6px;
+            color: white;
+            font-size: 16px;
+        }
+        input:focus {
+            outline: none;
+            border-color: #60a5fa;
+        }
+        .btn {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(to right, #2563eb, #06b6d4);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .btn:hover { transform: translateY(-2px); }
+        .link {
+            text-align: center;
+            margin-top: 20px;
+            color: #94a3b8;
+        }
+        .link a {
+            color: #60a5fa;
+            text-decoration: none;
+        }
+        .flash {
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .flash.error {
+            background: rgba(220, 38, 38, 0.2);
+            border: 1px solid #dc2626;
+            color: #fca5a5;
+        }
+        .flash.success {
+            background: rgba(34, 197, 94, 0.2);
+            border: 1px solid #22c55e;
+            color: #86efac;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{% if mode == 'signup' %}Create Account{% else %}Welcome Back{% endif %}</h1>
+        
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        
+        <form method="POST">
+            <div class="form-group">
+                <label>Email</label>
+                <input type="email" name="email" required>
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" name="password" required minlength="8">
+            </div>
+            <button type="submit" class="btn">
+                {% if mode == 'signup' %}Create Account{% else %}Log In{% endif %}
+            </button>
+        </form>
+        
+        <div class="link">
+            {% if mode == 'signup' %}
+                Already have an account? <a href="/login">Log In</a>
+            {% else %}
+                Don't have an account? <a href="/signup">Sign Up</a>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+DASHBOARD_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dashboard - Chain Watcher</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            padding: 20px;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        header {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        h1 { color: #58a6ff; font-size: 24px; }
+        .user-info { color: #8b949e; font-size: 14px; }
+        .nav a {
+            color: #58a6ff;
+            text-decoration: none;
+            margin-left: 20px;
+        }
+        .section {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+        h2 { color: #58a6ff; margin-bottom: 20px; }
+        .wallet-list { margin-top: 20px; }
+        .wallet-item {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .wallet-address { font-family: monospace; color: #58a6ff; }
+        .wallet-label { color: #8b949e; font-size: 14px; }
+        .btn {
+            padding: 8px 16px;
+            background: #238636;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn-danger { background: #dc2626; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; color: #8b949e; }
+        input {
+            width: 100%;
+            padding: 10px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            color: white;
+        }
+        .alert-item {
+            background: #0d1117;
+            border-left: 4px solid #dc2626;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 10px;
+        }
+        .alert-critical { border-left-color: #dc2626; }
+        .alert-high { border-left-color: #fb8c00; }
+        .alert-medium { border-left-color: #d29922; }
+        .flash {
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+        .flash.error { background: rgba(220, 38, 38, 0.2); border: 1px solid #dc2626; }
+        .flash.success { background: rgba(34, 197, 94, 0.2); border: 1px solid #22c55e; }
+        .flash.warning { background: rgba(251, 140, 0, 0.2); border: 1px solid #fb8c00; }
+        .tier-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            background: rgba(88, 166, 255, 0.1);
+            border: 1px solid #58a6ff;
+            border-radius: 12px;
+            font-size: 12px;
+            color: #58a6ff;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>🛡️ Chain Watcher</h1>
+                <div class="user-info">
+                    {{ user.email }} <span class="tier-badge">{{ user.tier }}</span>
+                </div>
+            </div>
+            <div class="nav">
+                <a href="/settings">Settings</a>
+                <a href="/logout">Logout</a>
+            </div>
+        </header>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <!-- Add Wallet -->
+        <div class="section">
+            <h2>Add Wallet to Monitor</h2>
+            <form method="POST" action="/add-wallet">
+                <div class="form-group">
+                    <label>Ethereum Address</label>
+                    <input type="text" name="address" placeholder="0x..." required>
+                </div>
+                <div class="form-group">
+                    <label>Label (Optional)</label>
+                    <input type="text" name="label" placeholder="My Main Wallet">
+                </div>
+                <button type="submit" class="btn">Add Wallet</button>
+                <span style="color: #8b949e; margin-left: 15px;">
+                    {{ wallets|length }}/{{ wallet_limit }} wallets used
+                </span>
+            </form>
+        </div>
+
+        <!-- Monitored Wallets -->
+        <div class="section">
+            <h2>Monitored Wallets ({{ wallets|length }})</h2>
+            {% if wallets %}
+                <div class="wallet-list">
+                    {% for wallet in wallets %}
+                        <div class="wallet-item">
+                            <div>
+                                <div class="wallet-label">{{ wallet.label }}</div>
+                                <div class="wallet-address">{{ wallet.address }}</div>
+                            </div>
+                            <form method="POST" action="/remove-wallet/{{ wallet.id }}" style="display: inline;">
+                                <button type="submit" class="btn btn-danger" onclick="return confirm('Stop monitoring this wallet?')">Remove</button>
+                            </form>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <p style="color: #8b949e;">No wallets being monitored yet. Add one above!</p>
+            {% endif %}
+        </div>
+
+        <!-- Recent Alerts -->
+        <div class="section">
+            <h2>Recent Alerts ({{ recent_alerts|length }})</h2>
+            {% if recent_alerts %}
+                {% for alert in recent_alerts %}
+                    <div class="alert-item alert-{{ alert.threat_level }}">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                            <strong style="color: #c9d1d9;">{{ alert.threat_level.upper() }} Threat</strong>
+                            <span style="color: #8b949e; font-size: 14px;">{{ alert.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                        </div>
+                        <div style="color: #8b949e; font-size: 14px;">
+                            Wallet: <code>{{ alert.wallet_address[:10] }}...{{ alert.wallet_address[-8:] }}</code>
+                        </div>
+                        <div style="color: #8b949e; font-size: 14px; margin-top: 5px;">
+                            Risk Score: {{ alert.threat_score }}/100
+                        </div>
+                        {% if alert.message %}
+                            <div style="color: #c9d1d9; margin-top: 10px;">{{ alert.message }}</div>
+                        {% endif %}
+                    </div>
+                {% endfor %}
+            {% else %}
+                <p style="color: #8b949e;">No alerts yet. We're monitoring your wallets 24/7!</p>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+SETTINGS_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Settings - Chain Watcher</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            padding: 20px;
+        }
+        .container { max-width: 800px; margin: 0 auto; }
+        header {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        h1 { color: #58a6ff; font-size: 24px; }
+        .nav a {
+            color: #58a6ff;
+            text-decoration: none;
+            margin-left: 20px;
+        }
+        .section {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+        h2 { color: #58a6ff; margin-bottom: 20px; }
+        .form-group { margin-bottom: 20px; }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #c9d1d9;
+            font-weight: 500;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            color: white;
+            font-size: 14px;
+        }
+        .help-text {
+            color: #8b949e;
+            font-size: 14px;
+            margin-top: 5px;
+        }
+        .btn {
+            padding: 12px 24px;
+            background: #238636;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .btn:hover { background: #2ea043; }
+        .info-box {
+            background: rgba(88, 166, 255, 0.1);
+            border: 1px solid #58a6ff;
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 20px;
+        }
+        .flash {
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+        .flash.success { background: rgba(34, 197, 94, 0.2); border: 1px solid #22c55e; }
+        .flash.error { background: rgba(220, 38, 38, 0.2); border: 1px solid #dc2626; }
+        code {
+            background: #0d1117;
+            padding: 2px 6px;
+            border-radius: 3px;
+            color: #58a6ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>⚙️ Settings</h1>
+            <div class="nav">
+                <a href="/dashboard">Dashboard</a>
+                <a href="/logout">Logout</a>
+            </div>
+        </header>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <!-- Discord Alerts -->
+        <div class="section">
+            <h2>🔔 Alert Settings</h2>
+            <form method="POST">
+                <div class="form-group">
+                    <label>Discord Webhook URL</label>
+                    <input type="url" name="discord_webhook" 
+                           value="{{ user.discord_webhook or '' }}"
+                           placeholder="https://discord.com/api/webhooks/...">
+                    <div class="help-text">
+                        Get instant alerts in your Discord server when threats are detected.
+                    </div>
+                </div>
+                <button type="submit" class="btn">Save Settings</button>
+            </form>
+
+            <div class="info-box">
+                <strong style="color: #58a6ff;">How to get a Discord webhook:</strong><br>
+                1. Open Discord and go to Server Settings → Integrations<br>
+                2. Click "Create Webhook" or "New Webhook"<br>
+                3. Choose a channel and copy the webhook URL<br>
+                4. Paste it above and save<br><br>
+                A test alert will be sent to verify it's working!
+            </div>
+        </div>
+
+        <!-- Account Info -->
+        <div class="section">
+            <h2>👤 Account Information</h2>
+            <p><strong>Email:</strong> {{ user.email }}</p>
+            <p><strong>Plan:</strong> <code>{{ user.tier.upper() }}</code></p>
+            <p><strong>Member since:</strong> {{ user.created_at.strftime('%B %d, %Y') }}</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+# ============================================================================
+# INITIALIZE DATABASE
+# ============================================================================
+
+def init_db():
+    with app.app_context():
+        db.create_all()
+        print("✅ Database initialized!")
+
+# ============================================================================
+# MAIN
+# ============================================================================
+
+if __name__ == '__main__':
+    init_db()
+    
+    # Run Flask app
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
