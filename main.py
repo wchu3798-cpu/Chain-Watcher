@@ -4,3 +4,26 @@ def main():
 
 if __name__ == "__main__":
     main()
+from fastapi import FastAPI
+import uvicorn
+import os
+
+app = FastAPI()
+
+@app.get("/")
+def read_root():
+    return {"message": "Hello from Chain-Watcher!"}
+
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+```
+
+With `requirements.txt`:
+```
+fastapi==0.104.1
+uvicorn==0.24.0

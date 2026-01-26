@@ -4,4 +4,8 @@ flask-bcrypt==1.0.1
 requests==2.31.0
 web3==6.11.3
 gunicorn==21.2.0
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+requests==2.31.0
+web3==6.11.3
 psycopg2-binary==2.9.9
