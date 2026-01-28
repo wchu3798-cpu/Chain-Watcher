@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from pathlib import Path
 import uvicorn
 import os
 
@@ -15,12 +16,15 @@ def read_root():
 def health_check():
     return {"status": "healthy"}
 
-# Mount static files and serve the frontend
-app.mount("/static", StaticFiles(directory="client"), name="static")
-
-# Serve index.html at the root
-@app.get("/")
-async def serve_frontend():
+# Mount the entire client directory to serve all static files
+# This needs to be at the end, after API routes
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str):
+    # Try to serve the requested file from client directory
+    file_path = Path("client") / full_path
+    if file_path.is_file():
+        return FileResponse(file_path)
+    # If file doesn't exist, serve index.html (SPA fallback)
     return FileResponse('client/index.html')
 
 if __name__ == "__main__":
